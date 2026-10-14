@@ -256,6 +256,67 @@ describe("upstream proxy", () => {
   });
 });
 
+describe("asset trees", () => {
+  it("serves the tree index at the prefix itself", async () => {
+    // Typing /website must land on the site, not a listing or a 404.
+    let seenUrl;
+    withAssets(async (r) => {
+      seenUrl = r.url;
+      return assetResponse("<html>site</html>");
+    });
+    const res = await worker.fetch(req("/website"), ENV, {});
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("site");
+    expect(seenUrl).toBe("https://god.htp.sh/website/index.html");
+  });
+
+  it("serves a file inside the tree", async () => {
+    let seenUrl;
+    withAssets(async (r) => {
+      seenUrl = r.url;
+      return assetResponse("video-bytes");
+    });
+    const res = await worker.fetch(req("/website/bg.webm"), ENV, {});
+    expect(res.status).toBe(200);
+    expect(seenUrl).toBe("https://god.htp.sh/website/bg.webm");
+  });
+
+  it("normalises a trailing slash on the prefix", async () => {
+    let seenUrl;
+    withAssets(async (r) => {
+      seenUrl = r.url;
+      return assetResponse("<html>site</html>");
+    });
+    const res = await worker.fetch(req("/website/"), ENV, {});
+    expect(res.status).toBe(200);
+    expect(seenUrl).toBe("https://god.htp.sh/website/index.html");
+  });
+
+  it("falls through to the 404 page on a miss inside the tree", async () => {
+    withAssets(async () => new Response("nope", { status: 404 }));
+    const res = await worker.fetch(req("/website/not-here.html"), ENV, {});
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("NOT FOUND");
+  });
+
+  it("refuses to traverse out of the tree", async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("{}"));
+    try {
+      // Encoded traversal must not resolve to a file outside public/website.
+      const res = await worker.fetch(req("/website/..%2F..%2Fwrangler.jsonc"), ENV, {});
+      expect(res.status).toBe(404);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally { globalThis.fetch = orig; }
+  });
+
+  it("does not treat a prefix-similar path as a tree hit", async () => {
+    withAssets(async () => new Response("{}"));
+    const res = await worker.fetch(req("/websites"), ENV, {});
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("viewer redirects", () => {
   it("sends /gods-eye straight to the upstream canonical URL", async () => {
     // One hop, not two: going via /osint/gods-eye would cost a second 302 on

@@ -36,6 +36,8 @@ const PAGES = {
           <p>Photorealistic 3D globe and GEOINT console. Canonical app.</p></a>
         <a class="card" href="/osint"><h3>OSINT</h3>
           <p>Visual GEOINT geolocation. Proxied upstream.</p></a>
+        <a class="card" href="/website"><h3>Website</h3>
+          <p>Project site mirror. Served from static assets.</p></a>
       </div>`,
   },
   "/dashboard": { file: "dashboard.html", title: "Gateway Control" },
@@ -68,6 +70,7 @@ const NOT_FOUND = (path) => `<!doctype html>
   <li><code>/ai</code> — MCP gateway (proxied upstream)</li>
   <li><code>/osint</code> — OSINT (proxied upstream)</li>
   <li><a href="/gods-eye">/gods-eye</a> — God's Eye 3D globe (short redirect)</li>
+  <li><a href="/website">/website</a> — project site mirror</li>
 </ul>
 <p>API callers should fetch <code>/ai</code> for the machine-readable route map.</p>
 </div></body></html>`;
@@ -111,6 +114,39 @@ const DOCS = {
   "/dashboard": "dashboard.html",
   "/lattice": "e8-lattice.html",
 };
+
+/**
+ * Subtrees served from Static Assets by URL prefix.
+ *
+ * Key is the prefix as the router normalises it (no trailing slash); value is
+ * the directory under public/ that backs it. A request for the prefix itself
+ * resolves to index.html, so typing /website lands on the site rather than a
+ * directory listing or a 404.
+ *
+ * This mirrors the repository's website/ directory, which is also served from
+ * hackdeplanet Pages. Two copies means one can drift; keep them in sync.
+ */
+const ASSET_TREES = {
+  "/website": "website",
+};
+
+/**
+ * Turn a successful asset response into the router's own response.
+ *
+ * Returns null on a miss so the caller can fall through to the 404 page rather
+ * than relaying the asset server's bare miss.
+ */
+function serveAsset(assetRes, method) {
+  if (!assetRes.ok) return null;
+  const headers = new Headers(assetRes.headers);
+  headers.set("Cache-Control", "public, max-age=60");
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("X-Router", "god.htp.sh");
+  return new Response(method === "HEAD" ? null : assetRes.body, {
+    status: 200,
+    headers,
+  });
+}
 
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade",
@@ -164,18 +200,25 @@ export default {
 
     const doc = DOCS[path];
     if (doc && (request.method === "GET" || request.method === "HEAD")) {
-      // Served from Static Assets rather than inlined, so the pages stay
-      // single-source files that can be opened and edited locally.
       const assetRes = await env.ASSETS.fetch(new Request(new URL(`/${doc}`, url)));
-      if (assetRes.ok) {
-        const headers = new Headers(assetRes.headers);
-        headers.set("Cache-Control", "public, max-age=60");
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("X-Router", "god.htp.sh");
-        return new Response(
-          request.method === "HEAD" ? null : assetRes.body,
-          { status: 200, headers },
-        );
+      const served = serveAsset(assetRes, request.method);
+      if (served) return served;
+    }
+
+    if (request.method === "GET" || request.method === "HEAD") {
+      for (const [prefix, dir] of Object.entries(ASSET_TREES)) {
+        if (path !== prefix && !path.startsWith(`${prefix}/`)) continue;
+        // url.pathname is already normalised by the URL parser, so `..` cannot
+        // survive into `rel`; the explicit reject is belt-and-braces against a
+        // future refactor that reassembles the path from raw input.
+        const rel = path.slice(prefix.length).replace(/^\/+/, "") || "index.html";
+        if (rel.includes("..")) break;
+        const assetRes = await env.ASSETS.fetch(new Request(new URL(`/${dir}/${rel}`, url)));
+        const served = serveAsset(assetRes, request.method);
+        // A miss inside a known tree falls through to the 404 page, which
+        // tells the caller what does exist instead of relaying a bare miss.
+        if (served) return served;
+        break;
       }
     }
 

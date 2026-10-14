@@ -14,6 +14,17 @@
     // Assets are never served directly: the router decides every path, so an
     // unmatched request gets the router's 404 page rather than a bare 404
     // from the asset server.
+    //
+    // `run_worker_first` is what actually enforces that. Without it the asset
+    // server wins any request whose path matches an asset — including by
+    // extensionless resolution, so /dashboard was served straight from
+    // dashboard.html and bypassed the router entirely (no X-Router, and
+    // cache-control came back as the asset default `max-age=0, must-revalidate`
+    // rather than the router's `max-age=60`). It only appeared to work because
+    // no asset matched /lattice, so that one did reach the worker.
+    //
+    // true = every request goes to the worker, which decides for itself.
+    "run_worker_first": true,
     "not_found_handling": "none"
   },
 
