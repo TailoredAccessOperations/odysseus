@@ -95,6 +95,30 @@ export function resetState() {
   state.cursor = 0;
 }
 
+/**
+ * Peer workers shown on the dashboard. Excludes this worker itself, so the
+ * dashboard reports the others rather than probing its own isolate.
+ */
+const PEER_WORKERS = Object.freeze([
+  {
+    name: "odysseus-edge-optimizer",
+    url: "https://odysseus-edge-optimizer.doxbin.workers.dev",
+  },
+]);
+
+
+/** CORS for the read-only dashboard endpoints, which the page calls directly. */
+function corsJson(body, status = 200) {
+  return new Response(JSON.stringify(body, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade",
   "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -177,10 +201,55 @@ export default {
     const cfg = config(env);
     const url = new URL(request.url);
 
-    // Liveness + routing introspection, mirroring GET /api/mcp/gateways/health.
+
+    // ---- dashboard --------------------------------------------------------
+    // Aggregated view of the deployed workers plus the upstream pool.
+    // Read-only: it fans out to peer workers and the upstreams and returns
+    // their status without proxying any response body.
+    if (url.pathname === "/__gateway/dashboard") {
+      const probeUpstream = async (base) => {
+        const started = Date.now();
+        try {
+          const res = await fetch(`${base}/ai/health`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          return {
+            base_url: base,
+            ok: res.ok,
+            status: res.status,
+            latencyMs: Date.now() - started,
+          };
+        } catch (err) {
+          return {
+            base_url: base,
+            ok: false,
+            status: 0,
+            error: String((err && err.name) || err),
+          };
+        }
+      };
+
+      return corsJson({
+        gateway: {
+          pool: cfg.pool,
+          routable: cfg.pool.filter((u) => isAvailable(recordFor(u))),
+          endpoints: cfg.pool.map((u) => ({ base_url: u, ...recordFor(u) })),
+        },
+        // Peers are intentionally absent: see PEER_WORKERS. The page probes them.
+        peers: PEER_WORKERS,
+        upstream: await Promise.all(cfg.pool.map(probeUpstream)),
+        // Attach the origin: recordFor() keys on the URL but does not store
+        // it, so mapping over pool without re-adding it loses the address.
+        routing: cfg.pool.map((u) => ({ base_url: u, ...recordFor(u) })),
+        colo: (request.cf && request.cf.colo) || null,
+        country: (request.cf && request.cf.country) || null,
+      });
+    }
+
     if (url.pathname === "/__gateway/health") {
       const now = Date.now();
-      return json({
+      return corsJson({
+        worker: "odysseus-mcp-gateway",
         pool: cfg.pool,
         routable: cfg.pool.filter((u) => isAvailable(recordFor(u), now)),
         endpoints: cfg.pool.map((u) => {

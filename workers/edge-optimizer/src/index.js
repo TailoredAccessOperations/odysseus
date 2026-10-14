@@ -207,6 +207,35 @@ export default {
     const cacheable = request.method === 'GET' || request.method === 'HEAD';
 
     try {
+      // Health endpoint, matching the shape the gateway Worker publishes, so
+      // the dashboard can cross-probe this worker alongside the others. It
+      // answers before any proxying or rewriting.
+      if (url.pathname === '/__gateway/health') {
+        return new Response(JSON.stringify({
+          worker: 'odysseus-edge-optimizer',
+          origin: env.ORIGIN_HOST || 'htp.sh',
+          cache: env.ENABLE_CACHE === '1' ? 'on' : 'off',
+          routable: [env.ORIGIN_HOST || 'htp.sh'],
+          endpoints: [{
+            base_url: env.ORIGIN_HOST || 'htp.sh',
+            dead: false,
+            cooling: false,
+            strikes: 0,
+            ok: 0,
+            fail: 0,
+          }],
+        }, null, 2), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            // Read by the dashboard page directly: a Worker cannot fetch a
+            // peer Worker on the same account (Cloudflare error 1042), so the
+            // browser does the cross-probe.
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',
+          },
+        });
+      }
       // Self-test route: exists so the HTMLRewriter behaviour can be verified
       // against real workerd (see test/integration.test.js). Gated so it can
       // never respond in a deployed environment.
