@@ -246,7 +246,45 @@ export default {
       });
     }
 
-    if (url.pathname === "/__gateway/health") {
+    /**
+ * Gateway manifest.
+ *
+ * Served so this Worker can be an origin in its own pool, and so any gateway
+ * consumer can discover routes without hardcoding them. `status` is "local"
+ * unless every pooled upstream is routable AND responding — it reports the
+ * pool's real health rather than asserting an upstream that is down.
+ */
+if (url.pathname === "/ai" || url.pathname === "/ai/") {
+  const now = Date.now();
+  const routable = cfg.pool.filter((u) => isAvailable(recordFor(u), now));
+  return corsJson({
+    status: routable.length === cfg.pool.length && cfg.pool.length ? "ok" : "local",
+    gateway: new URL(request.url).host,
+    message:
+      routable.length === cfg.pool.length && cfg.pool.length
+        ? "all pooled gateways routable"
+        : "no pooled upstream is routable",
+    endpoints: {
+      models: "/ai/models",
+      chat: "/chat/api/ask",
+      tools: "/ai/tools",
+      compose: "/ai/compose",
+      route: "/ai/route",
+      capabilities: "/ai/capabilities",
+      abilities: "/api/abilities",
+      health: "/ai/health",
+      metrics: "/ai/metrics",
+      vitals: "/api/vitals",
+      mcp_resources: "/ai/mcp/resources",
+      mcp_read: "/ai/mcp/resources/read",
+    },
+    pool: cfg.pool,
+    routable,
+    colo: (request.cf && request.cf.colo) || null,
+  });
+}
+
+if (url.pathname === "/__gateway/health") {
       const now = Date.now();
       return corsJson({
         worker: "odysseus-mcp-gateway",
