@@ -33,7 +33,8 @@
   "workers_dev": true,
 
   "vars": {
-    "UPSTREAM": "https://htp.sh"
+    "UPSTREAM": "https://htp.sh",
+    "APP_UPSTREAM": "https://odysseus-origin.htp.sh"
   },
 
   // A ROUTE, not a custom domain.
@@ -46,6 +47,11 @@
   // Additive: it adds one pattern and removes nothing. htp.sh root, /ai,
   // /osint and /osint/gods-eye keep their existing owners.
   "routes": [
-    { "pattern": "god.htp.sh/*", "zone_name": "htp.sh" }
+    { "pattern": "god.htp.sh/*", "zone_name": "htp.sh" },
+    // /god/... viewer aliases on the apex. Narrow on purpose: x.ai, osint,
+    // maps, api and ai keep their existing owners.
+    { "pattern": "htp.sh/god/osint/*", "zone_name": "htp.sh" },
+    { "pattern": "htp.sh/god/osint/gods-eye-viewer", "zone_name": "htp.sh" },
+    { "pattern": "htp.sh/god/os/int/gods-eye-viewer", "zone_name": "htp.sh" }
   ]
 }

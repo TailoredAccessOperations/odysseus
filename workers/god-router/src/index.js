@@ -20,6 +20,21 @@ const VIEWER_PATH = "/osint/gods-eye";
 /** Upstream paths this router forwards rather than serving itself. */
 const PROXY_PREFIXES = ["/ai", "/osint", "/chat/api"];
 
+/**
+ * Aliases under /god/... that reach the God's Eye viewer. These are served on
+ * god.htp.sh and, through the zone routes htp.sh/god/osint/* and
+ * htp.sh/god/os/int/gods-eye-viewer, on the htp.sh apex as well.
+ */
+const GOD_VIEWER_ALIASES = ["/god/osint/gods-eye-viewer", "/god/os/int/gods-eye-viewer"];
+const GOD_VIEWER_PATH = "/god/osint/gods-eye";
+
+/**
+ * Odysseus app, reached through a Cloudflare Tunnel origin hostname. The
+ * /app prefix is stripped before forwarding. Target comes from env.APP_UPSTREAM.
+ */
+const APP_PREFIX = "/app";
+const APP_UPSTREAM_DEFAULT = "https://odysseus-origin.htp.sh";
+
 const PAGES = {
   "/": {
     title: "GOD.htp.sh",
@@ -184,8 +199,9 @@ export default {
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": request.headers.get("Access-Control-Request-Headers") || "Content-Type, Authorization",
+          "Access-Control-Max-Age": "600",
         },
       });
     }
@@ -255,6 +271,22 @@ export default {
     // The Location is deliberately ABSOLUTE and points at the upstream origin.
     // Rewriting it to be origin-relative would send the browser back to this
     // router, which cannot serve the app — an infinite 302 loop.
+    // /god/... aliases for the viewer (also reached on the htp.sh apex).
+    if (GOD_VIEWER_ALIASES.includes(path)) {
+      return redirect(`${UPSTREAM_ORIGIN}${VIEWER_PATH}/${url.search}`);
+    }
+    if (path === GOD_VIEWER_PATH || path.startsWith(`${GOD_VIEWER_PATH}/`)) {
+      const suffix = url.pathname.slice(GOD_VIEWER_PATH.length) + url.search;
+      return redirect(
+        `${UPSTREAM_ORIGIN}${VIEWER_PATH}/${suffix.replace(/^\/+/, "")}`,
+      );
+    }
+
+    // Odysseus app via tunnel: all methods, streamed bodies, WebSockets.
+    if (path === APP_PREFIX || path.startsWith(`${APP_PREFIX}/`)) {
+      return proxyApp(request, url, env.APP_UPSTREAM || APP_UPSTREAM_DEFAULT);
+    }
+
     if (path === VIEWER_PATH || path.startsWith(`${VIEWER_PATH}/`)) {
       const suffix = url.pathname.slice(VIEWER_PATH.length) + url.search;
       return redirect(
@@ -352,4 +384,50 @@ async function proxyUpstream(request, url, upstream) {
     statusText: res.statusText,
     headers: out,
   });
+}
+
+/**
+ * Proxy /app/* to the Odysseus tunnel origin with the prefix stripped.
+ *
+ * Bodies are streamed in both directions (no buffering), every method is
+ * passed through, and WebSocket upgrades are handed to fetch() with the
+ * Upgrade header intact so the runtime returns the 101 + webSocket pair.
+ */
+async function proxyApp(request, url, upstream) {
+  const base = new URL(upstream);
+  const target = new URL(url.toString());
+  target.protocol = base.protocol;
+  target.host = base.host;
+  target.pathname = url.pathname.slice(APP_PREFIX.length) || "/";
+
+  if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+    return fetch(new Request(target.toString(), request));
+  }
+
+  const headers = new Headers();
+  for (const [k, v] of request.headers) {
+    if (REQUEST_STRIP.has(k.toLowerCase())) continue;
+    headers.set(k, v);
+  }
+  headers.set("X-Forwarded-Host", url.host);
+  headers.set("X-Forwarded-Prefix", APP_PREFIX);
+  headers.set("X-Router", "god.htp.sh");
+
+  const hasBody = !(request.method === "GET" || request.method === "HEAD");
+  const res = await fetch(target.toString(), {
+    method: request.method,
+    headers,
+    body: hasBody ? request.body : undefined,
+    redirect: "manual",
+  });
+
+  const out = new Headers();
+  for (const [k, v] of res.headers) {
+    if (!HOP_BY_HOP.has(k.toLowerCase())) out.set(k, v);
+  }
+  // Keep app-relative redirects inside /app.
+  const loc = out.get("Location");
+  if (loc && loc.startsWith("/")) out.set("Location", APP_PREFIX + loc);
+  out.set("X-Router", "god.htp.sh");
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out });
 }
