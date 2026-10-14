@@ -405,3 +405,115 @@ async def test_execute_uses_the_gateway_when_bedrock_not_selected(tool, monkeypa
     result = await tool.execute(base64.b64encode(PNG).decode(), {})
     assert result["exit_code"] == 0
     assert called == ["image/png"]
+
+
+# -- Bedrock call path -----------------------------------------------------
+#
+# boto3 is not a dependency of this repo, so the live path cannot run here.
+# A recording stand-in covers everything up to real SigV4 signing and the
+# network call, which is the part an account is needed for.
+
+@pytest.fixture()
+def fake_boto3(monkeypatch):
+    """Install a recording stand-in for boto3; returns an installer."""
+    recorder = {"client_args": None, "kwargs": None}
+
+    class FakeClient:
+        def __init__(self, reply, exc):
+            self._reply = reply
+            self._exc = exc
+
+        def converse_model(self, **kwargs):
+            recorder["kwargs"] = kwargs
+            if self._exc is not None:
+                raise self._exc
+            return {"output": {"message": {"content": [{"text": self._reply}]}}}
+
+    def install(reply="{}", exc=None):
+        mod = types.ModuleType("boto3")
+
+        def client(name, **kwargs):
+            recorder["client_args"] = (name, kwargs)
+            return FakeClient(reply, exc)
+
+        mod.client = client
+        monkeypatch.setitem(sys.modules, "boto3", mod)
+        return recorder
+
+    return install
+
+
+@pytest.mark.asyncio
+async def test_bedrock_builds_the_converse_request(tool, monkeypatch, fake_boto3):
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.setenv("ODYSSEUS_BEDROCK_MODEL", "test-profile")
+    rec = fake_boto3(reply='{"lat": 10.0, "lon": 20.0, "confidence": 0.7}')
+
+    out = await tool._analyze_bedrock(PNG, "image/png")
+
+    # Correct service and region, or the call lands in the wrong place entirely.
+    assert rec["client_args"][0] == "bedrock-runtime"
+    assert rec["client_args"][1]["region_name"] == "eu-central-1"
+    assert rec["kwargs"]["modelId"] == "test-profile"
+    assert rec["kwargs"]["inferenceConfig"]["temperature"] == 0.2
+
+    blocks = rec["kwargs"]["messages"][0]["content"]
+    assert blocks[1]["image"]["format"] == "png"
+    # Raw bytes, not base64: boto3 base64-encodes the source itself.
+    assert blocks[1]["image"]["source"]["bytes"] == PNG
+
+    assert "exit_code" not in out
+    assert out["guess"]["lat"] == 10.0
+    assert out["engine"] == "bedrock:test-profile"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sends_the_format_hint_prompt(tool, monkeypatch, fake_boto3):
+    # The prompt asks for JSON because the reply is parsed, not trusted.
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    rec = fake_boto3(reply="{}")
+    await tool._analyze_bedrock(PNG, "image/jpeg")
+    text = rec["kwargs"]["messages"][0]["content"][0]["text"]
+    assert "JSON" in text
+    assert "lat" in text and "lon" in text
+
+
+@pytest.mark.asyncio
+async def test_bedrock_maps_mime_to_converse_format(tool, monkeypatch, fake_boto3):
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    rec = fake_boto3(reply="{}")
+    await tool._analyze_bedrock(b"\xff\xd8\xffdata", "image/jpeg")
+    assert rec["kwargs"]["messages"][0]["content"][1]["image"]["format"] == "jpeg"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_reports_client_errors(tool, monkeypatch, fake_boto3):
+    # boto3 raises a wide family of ClientError; none may escape as a crash.
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    fake_boto3(exc=RuntimeError("AccessDeniedException: not authorized"))
+    out = await tool._analyze_bedrock(PNG, "image/png")
+    assert out["exit_code"] == 1
+    assert "Bedrock request failed" in out["error"]
+    assert "not authorized" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_reports_missing_boto3(tool, monkeypatch):
+    # boto3 is an optional dep, so its absence must be a clear instruction
+    # rather than an ImportError traceback.
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    monkeypatch.setitem(sys.modules, "boto3", None)  # forces ImportError
+    out = await tool._analyze_bedrock(PNG, "image/png")
+    assert out["exit_code"] == 1
+    assert "boto3" in out["error"]
+    assert "pip install boto3" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_missing_boto3_names_the_gateway_alternative(tool, monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_OSINT_BACKEND", "bedrock")
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    out = await tool._analyze_bedrock(PNG, "image/png")
+    # The reader needs a way out, not just a complaint.
+    assert "ODYSSEUS_OSINT_BACKEND=gateway" in out["error"]
