@@ -497,6 +497,49 @@ VARIABLE_NOTES: dict[str, tuple[str, str, str]] = {
         "Security-relevant. Comma-separated allowlist of MCP launcher basenames the "
         "agent may start. Empty by default, and the deny list still wins.",
     ),
+    "ODYSSEUS_OSINT_MAX_BYTES": (
+        "Agent loop and tool execution", USER,
+        "Largest image the osint_locate tool will upload for geolocation, in bytes. "
+        "The upstream vision model reads the whole image, so a larger upload costs "
+        "real wall-clock time and money.",
+    ),
+    "ODYSSEUS_OSINT_PATH": (
+        "Agent loop and tool execution", USER,
+        "Path on the gateway that the osint_locate tool posts to. Point this at a "
+        "gateway advertising an 'osint_analyze' route, or leave it for the default.",
+    ),
+    "ODYSSEUS_OSINT_TIMEOUT": (
+        "Agent loop and tool execution", USER,
+        "Seconds to wait for an osint_locate geolocation. Must clear a cold vision "
+        "model start, which measured near 100s for a single small image.",
+    ),
+    "ODYSSEUS_GATEWAY_URLS": (
+        "Agent loop and tool execution", USER,
+        "Comma-separated HTTPS base URLs of MCP API gateways forming a round-robin "
+        "pool. Empty by default; endpoints can also be added at runtime via "
+        "/api/mcp/gateways.",
+    ),
+    "ODYSSEUS_GATEWAY_COOLDOWN": (
+        "Agent loop and tool execution", USER,
+        "Base cooldown in seconds for a gateway endpoint that failed. Backoff "
+        "doubles per consecutive failure, so the default reaches four minutes in "
+        "three tries.",
+    ),
+    "ODYSSEUS_GATEWAY_COOLDOWN_MAX": (
+        "Agent loop and tool execution", USER,
+        "Upper bound in seconds on gateway exponential backoff. Caps the cooldown "
+        "so a badly failing endpoint is retried periodically instead of never.",
+    ),
+    "ODYSSEUS_GATEWAY_TIMEOUT": (
+        "Agent loop and tool execution", USER,
+        "Per-request timeout in seconds for calls through the MCP gateway pool.",
+    ),
+    "ODYSSEUS_GATEWAY_ALLOW_PRIVATE": (
+        "Agent loop and tool execution", USER,
+        "Security-relevant. Off by default: gateway URLs must be HTTPS and resolve "
+        "to public addresses, which blocks using an admin endpoint to reach internal "
+        "or cloud-metadata addresses. Set to 1 only for gateways on your own LAN.",
+    ),
     "ODYSSEUS_MCP_MEMORY_OWNER": (
         "Memory and skills", USER,
         "Application owner binding for the configured memory MCP backend. Takes "
