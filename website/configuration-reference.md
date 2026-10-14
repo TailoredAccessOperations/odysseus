@@ -21,7 +21,7 @@ described as a switch that turns something off, the read rejects `0`, `false`,
 `no` and `off` and treats everything else as on. The `Default` column is the
 value the code falls back to when the variable is unset, quoted from the source.
 
-The source tree reads **125** `ODYSSEUS_*` variables: 89 an operator may want to set, and 36 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
+The source tree reads **127** `ODYSSEUS_*` variables: 91 an operator may want to set, and 36 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
 
 > This page is generated. Edit `scripts/generate_env_reference.py` and
 > re-run it; `tests/test_env_reference.py` enforces that the committed page
@@ -71,6 +71,7 @@ The source tree reads **125** `ODYSSEUS_*` variables: 89 an operator may want to
 
 | Variable | Default | Read in | What it does |
 |---|---|---|---|
+| `ODYSSEUS_BEDROCK_MODEL` | *unset* | `src/agent_tools/osint_tools.py` | Model or cross-region inference profile id used by the Bedrock OSINT backend. The default is a cross-region profile, because Bedrock requires the profile form for most Anthropic models. |
 | `ODYSSEUS_DISABLE_MCP` | `''` | `src/builtin_mcp.py` | Truthy disables MCP entirely, as an escape hatch for compatibility problems with a server. |
 | `ODYSSEUS_GATEWAY_ALLOW_PRIVATE` | `''` | `src/mcp_gateway.py` | Security-relevant. Off by default: gateway URLs must be HTTPS and resolve to public addresses, which blocks using an admin endpoint to reach internal or cloud-metadata addresses. Set to 1 only for gateways on your own LAN. |
 | `ODYSSEUS_GATEWAY_COOLDOWN` | `'60'` | `src/mcp_gateway.py` | Base cooldown in seconds for a gateway endpoint that failed. Backoff doubles per consecutive failure, so the default reaches four minutes in three tries. |
@@ -80,6 +81,7 @@ The source tree reads **125** `ODYSSEUS_*` variables: 89 an operator may want to
 | `ODYSSEUS_MAX_VISUAL_EVIDENCE_FRAMES` | `'3'` | `src/agent_loop.py` | How many video frames one tool result may contribute. Clamped to 1-8. |
 | `ODYSSEUS_MAX_VISUAL_EVIDENCE_IMAGES` | `'1'` | `src/agent_loop.py` | How many images one tool result may contribute to the model turn. Clamped to 1-8. |
 | `ODYSSEUS_MCP_ALLOWED_COMMANDS` | `''` | `src/agent_tools/admin_tools.py` | Security-relevant. Comma-separated allowlist of MCP launcher basenames the agent may start. Empty by default, and the deny list still wins. |
+| `ODYSSEUS_OSINT_BACKEND` | `'gateway'` | `src/agent_tools/osint_tools.py` | Backend for the osint_locate geolocation tool: 'gateway' (the default) uses the MCP gateway pool with round-robin failover, 'bedrock' calls AWS Bedrock directly via boto3. Only 'bedrock' needs credentials; a Bedrock failure is reported rather than silently falling back to the gateway. |
 | `ODYSSEUS_OSINT_MAX_BYTES` | `str(8 * 1024 * 1024)` | `src/agent_tools/osint_tools.py` | Largest image the osint_locate tool will upload for geolocation, in bytes. The upstream vision model reads the whole image, so a larger upload costs real wall-clock time and money. |
 | `ODYSSEUS_OSINT_PATH` | `'/osint/api/analyze'` | `src/agent_tools/osint_tools.py` | Path on the gateway that the osint_locate tool posts to. Point this at a gateway advertising an 'osint_analyze' route, or leave it for the default. |
 | `ODYSSEUS_OSINT_TIMEOUT` | `'240'` | `src/agent_tools/osint_tools.py` | Seconds to wait for an osint_locate geolocation. Must clear a cold vision model start, which measured near 100s for a single small image. |
@@ -273,7 +275,7 @@ reads three ways, because no single pattern covers the codebase:
   lines, so one read lives inside a string literal.
 
 The three passes are not redundancy. A line-based grep for a direct
-`os.environ.get("ODYSSEUS_...` call finds 95 of the 125 variables on this
+`os.environ.get("ODYSSEUS_...` call finds 95 of the 127 variables on this
 page. What it misses is reads through an env-reader helper, reads whose call
 spans more than one line, reads whose variable name is held in a module
 constant, and reads through a mapping passed in as an argument - which is the

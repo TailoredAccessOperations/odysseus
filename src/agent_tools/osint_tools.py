@@ -5,9 +5,27 @@ uploaded image and returns a coordinate guess with its reasoning and the
 clues it used. Used for "where was this photo taken" style questions and for
 checking whether an image in a chat matches a claimed location.
 
+Backends
+--------
+Two, selected by ``ODYSSEUS_OSINT_BACKEND``:
+
+``gateway`` (default)
+    The behaviour described above. Round-robins the configured MCP gateway
+    pool and fails over on error.
+``bedrock``
+    Calls the AWS Bedrock Converse API directly with boto3, bypassing the
+    gateway. Off unless the variable is set to ``bedrock``. Credentials are
+    resolved by boto3's provider chain, so static keys, short-lived
+    ``AWS_SESSION_TOKEN`` credentials, and IRSA/instance-profile roles all
+    work without special handling here.
+
+A Bedrock failure is returned as an error rather than silently falling back to
+the gateway: a fallback would report success while quietly doubling cost and
+latency, and would hide a misconfigured backend.
+
 Transport
 ---------
-Calls go through :func:`src.mcp_gateway.get_pool`, so every request is
+Gateway calls go through :func:`src.mcp_gateway.get_pool`, so every request is
 round-robined across the configured gateway pool and fails over on error. That
 keeps this tool's failure behaviour identical to every other gateway consumer
 rather than hardcoding one upstream.
@@ -46,6 +64,83 @@ _MAGIC = (
     (b"GIF89a", "image/gif"),
     (b"BM", "image/bmp"),
 )
+
+# ---------------------------------------------------------------------------
+# Optional AWS Bedrock backend.
+#
+# Off unless ODYSSEUS_OSINT_BACKEND=bedrock, so an existing deployment is
+# unaffected. Credentials are never read from or written to .env by this
+# module; they are resolved by boto3's own provider chain at call time, which
+# covers static keys, AWS_SESSION_TOKEN short-lived STS credentials, and
+# IRSA/instance-profile roles.
+#
+# Deliberately not routed through the provider layer in src/llm_core.py:
+# specs/model-providers/bedrock.md records native Bedrock as unimplemented and
+# warns that Bedrock is not an OpenAI-compatible host, so pointing that layer at
+# a bedrock-runtime endpoint would be the wrong shape. This calls the Converse
+# API directly instead — it is multimodal and family-agnostic, so there is no
+# per-family payload mapping to get wrong.
+# ---------------------------------------------------------------------------
+BACKEND_ENV = "ODYSSEUS_OSINT_BACKEND"
+BEDROCK_MODEL_ENV = "ODYSSEUS_BEDROCK_MODEL"
+DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+DEFAULT_AWS_REGION = "us-east-1"
+
+# Converse accepts this subset. sniff_image_type also returns bmp and tiff,
+# which Bedrock has no image format for, so those are rejected rather than
+# silently mislabelled.
+BEDROCK_IMAGE_FORMATS = {
+    "image/jpeg": "jpeg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+# Asked for strict JSON because _normalize_bedrock parses the reply rather than
+# trusting prose. Coordinates and a confidence figure are required; a model
+# that cannot place the image should say so with low confidence instead of
+# omitting the fields.
+BEDROCK_PROMPT = (
+    "You geolocate images. Reply with JSON only, no prose and no code fence, "
+    "in exactly this shape:\n"
+    '{"lat": <number|null>, "lon": <number|null>, "confidence": <0..1>, '
+    '"radiusKm": <number|null>, "placeName": <string|null>, '
+    '"country": <string|null>, "clues": [<string>, ...]}\n'
+    "Use null for any field you cannot support from the image. Base the answer "
+    "only on visual evidence in the image."
+)
+
+
+def bedrock_selected() -> bool:
+    """True when the caller explicitly asked for the Bedrock backend."""
+    return os.getenv(BACKEND_ENV, "gateway").strip().lower() == "bedrock"
+
+
+def bedrock_region() -> str:
+    return (
+        os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or DEFAULT_AWS_REGION
+    ).strip()
+
+
+def bedrock_model() -> str:
+    return (os.getenv(BEDROCK_MODEL_ENV) or DEFAULT_BEDROCK_MODEL).strip()
+
+
+def _strip_code_fence(text: str) -> str:
+    """Pull the JSON body out of a reply a model fenced in markdown.
+
+    Vision models wrap JSON in ```json fences often enough that assuming a bare
+    payload would fail on correct answers.
+    """
+    cleaned = text.strip()
+    if not cleaned.startswith("```"):
+        return cleaned
+    # Drop the opening fence and any language tag, then the closing fence.
+    _, _, rest = cleaned.partition("\n")
+    body = rest.rsplit("```", 1)[0]
+    return body.strip()
 
 
 def sniff_image_type(data: bytes) -> Optional[str]:
@@ -125,7 +220,12 @@ class OsintLocateTool:
                     "exit_code": 1,
                 }
 
-            result = await self._analyze(data, mime)
+            # Backend selection is explicit, not automatic: the gateway stays
+            # the default so an existing deployment changes nothing.
+            if bedrock_selected():
+                result = await self._analyze_bedrock(data, mime)
+            else:
+                result = await self._analyze(data, mime)
             if isinstance(result, dict) and "error" in result:
                 return result
 
@@ -179,6 +279,108 @@ class OsintLocateTool:
             return resp.json()
         except ValueError:
             return {"error": f"OSINT endpoint returned non-JSON: {resp.text[:200]}", "exit_code": 1}
+
+    async def _analyze_bedrock(self, data: bytes, mime: str) -> Any:
+        """Call the Bedrock Converse API directly with the image.
+
+        Runs the blocking boto3 call in a worker thread: the SDK is synchronous
+        and there is no async Bedrock client in boto3, so calling it inline
+        would stall the event loop for the whole model latency.
+
+        Deliberately does NOT fall back to the gateway on failure. A silent
+        fallback would hide a misconfigured backend and quietly double the cost
+        and latency of every call while reporting success, so the error is
+        returned and surfaced.
+        """
+        image_format = BEDROCK_IMAGE_FORMATS.get(mime)
+        if image_format is None:
+            return {
+                "error": (
+                    f"Bedrock cannot read {mime}; convert the image to JPEG or "
+                    "PNG before geolocating it"
+                ),
+                "exit_code": 1,
+            }
+
+        try:
+            import boto3
+        except ImportError as exc:
+            return {
+                "error": (
+                    "the Bedrock backend needs boto3, which is not installed; "
+                    "run `pip install boto3` or set "
+                    f"{BACKEND_ENV}=gateway to use the gateway instead"
+                ),
+                "exit_code": 1,
+            }
+
+        region = bedrock_region()
+        model = bedrock_model()
+
+        def call() -> str:
+            client = boto3.client("bedrock-runtime", region_name=region)
+            response = client.converse_model(
+                modelId=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": BEDROCK_PROMPT},
+                            {"image": {"format": image_format, "source": {"bytes": data}}},
+                        ],
+                    }
+                ],
+                inferenceConfig={"maxTokens": 1024, "temperature": 0.2},
+            )
+            # Converse returns a content block list; the text block is the reply.
+            blocks = response["output"]["message"]["content"]
+            return next(b["text"] for b in blocks if "text" in b)
+
+        try:
+            text = await asyncio.to_thread(call)
+        except Exception as exc:  # boto3 raises a wide family of ClientError
+            return {"error": f"Bedrock request failed: {exc}", "exit_code": 1}
+
+        return self._normalize_bedrock(text, model)
+
+    @staticmethod
+    def _normalize_bedrock(text: str, model: str) -> Dict[str, Any]:
+        """Turn a Converse reply into the same envelope the gateway returns.
+
+        Normalising here means _shape() and everything downstream stay
+        backend-agnostic.
+        """
+        try:
+            parsed = json.loads(_strip_code_fence(text))
+        except ValueError:
+            return {
+                "error": f"Bedrock model returned non-JSON: {text[:200]}",
+                "exit_code": 1,
+            }
+        if not isinstance(parsed, dict):
+            return {
+                "error": f"Bedrock model returned a non-object: {text[:200]}",
+                "exit_code": 1,
+        }
+        # The gateway nests coordinates under `guess`; mirror that so _shape()
+        # is unchanged. Clues arrive as a list from this prompt but upstream may
+        # return them as a string, which _shape would slice character-wise.
+        clues = parsed.get("clues")
+        if isinstance(clues, str):
+            clues = [clues]
+        return {
+            "guess": {
+                "lat": parsed.get("lat"),
+                "lon": parsed.get("lon"),
+                "confidence": parsed.get("confidence"),
+                "radiusKm": parsed.get("radiusKm"),
+                "placeName": parsed.get("placeName"),
+                "country": parsed.get("country"),
+                "clues": clues if isinstance(clues, list) else [],
+            },
+            "reasoning": parsed.get("reasoning"),
+            "engine": f"bedrock:{model}",
+        }
 
     @staticmethod
     def _shape(result: Dict[str, Any]) -> Dict[str, Any]:

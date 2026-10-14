@@ -513,6 +513,19 @@ VARIABLE_NOTES: dict[str, tuple[str, str, str]] = {
         "Seconds to wait for an osint_locate geolocation. Must clear a cold vision "
         "model start, which measured near 100s for a single small image.",
     ),
+    "ODYSSEUS_OSINT_BACKEND": (
+        "Agent loop and tool execution", USER,
+        "Backend for the osint_locate geolocation tool: 'gateway' (the default) uses "
+        "the MCP gateway pool with round-robin failover, 'bedrock' calls AWS Bedrock "
+        "directly via boto3. Only 'bedrock' needs credentials; a Bedrock failure is "
+        "reported rather than silently falling back to the gateway.",
+    ),
+    "ODYSSEUS_BEDROCK_MODEL": (
+        "Agent loop and tool execution", USER,
+        "Model or cross-region inference profile id used by the Bedrock OSINT "
+        "backend. The default is a cross-region profile, because Bedrock requires the "
+        "profile form for most Anthropic models.",
+    ),
     "ODYSSEUS_GATEWAY_URLS": (
         "Agent loop and tool execution", USER,
         "Comma-separated HTTPS base URLs of MCP API gateways forming a round-robin "
