@@ -69,6 +69,9 @@ describe("router", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
     expect(assets).not.toHaveBeenCalled();
+    // Every route the router answers carries the marker, so a response source
+    // can be identified from headers alone.
+    expect(res.headers.get("X-Router")).toBe("god.htp.sh");
   });
 
   it("CORS preflights OPTIONS", async () => {

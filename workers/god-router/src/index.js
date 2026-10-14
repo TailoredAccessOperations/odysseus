@@ -194,7 +194,17 @@ export default {
     if (path === "/healthz") {
       return Response.json(
         { ok: true, router: "god.htp.sh", upstream: env.UPSTREAM || ORIGIN },
-        { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } },
+        {
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            // Every other route the router answers carries this marker. Without
+            // it /healthz is indistinguishable from an asset-server or upstream
+            // response, which makes the marker useless for telling where a
+            // response came from.
+            "X-Router": "god.htp.sh",
+          },
+        },
       );
     }
 
