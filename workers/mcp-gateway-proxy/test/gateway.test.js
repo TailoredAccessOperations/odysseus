@@ -267,4 +267,18 @@ describe("fetch handler", () => {
       expect((await res.json()).pool).toEqual([]);
     } finally { restore(); }
   });
+
+  it("advertises osint_analyze in the manifest", async () => {
+    // Regression: without this key, mcp_gateway_transport.build_tools() never
+    // synthesises the osint_analyze tool, because it only creates tools for
+    // routes the manifest advertises. OSINT then works only via the hardcoded
+    // ANALYZE_PATH fallback, and nothing signals the gap.
+    const restore = mkFetch(async () => { throw new Error("unused"); });
+    try {
+      const res = await worker.fetch(req("/ai"), ENV, { waitUntil() {} });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.endpoints.osint_analyze).toBe("/osint/api/analyze");
+    } finally { restore(); }
+  });
 });

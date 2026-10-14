@@ -270,6 +270,13 @@ if (url.pathname === "/ai" || url.pathname === "/ai/") {
       tools: "/ai/tools",
       compose: "/ai/compose",
       route: "/ai/route",
+      // Advertised so mcp_gateway_transport.build_tools() can synthesise the
+      // osint_analyze tool. Without this key the transport never creates it and
+      // OSINT is reachable only through the hardcoded ANALYZE_PATH fallback in
+      // src/agent_tools/osint_tools.py. The route is served upstream by the
+      // OSINT worker, not here — this manifest is a discovery map, and the
+      // gateway is itself in the pool that resolves the path.
+      osint_analyze: "/osint/api/analyze",
       capabilities: "/ai/capabilities",
       abilities: "/api/abilities",
       health: "/ai/health",
