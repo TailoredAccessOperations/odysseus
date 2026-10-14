@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "god-router",
+  "main": "src/index.js",
+  "compatibility_date": "2025-01-01",
+  "observability": { "enabled": true },
+
+  // Workers Static Assets: dashboard.html and e8-lattice.html stay real files
+  // that can be opened and edited locally, rather than being inlined into the
+  // bundle as strings.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Assets are never served directly: the router decides every path, so an
+    // unmatched request gets the router's 404 page rather than a bare 404
+    // from the asset server.
+    "not_found_handling": "none"
+  },
+
+  // Keep the workers.dev URL available as well, so the router is reachable
+  // even if the zone route below is shadowed by something else.
+  "workers_dev": true,
+
+  "vars": {
+    "UPSTREAM": "https://htp.sh"
+  },
+
+  // A ROUTE, not a custom domain.
+  //
+  // The zone already has `*.htp.sh/*` -> still-firefly-7b67ebk. A custom
+  // domain on god.htp.sh was registered but the wildcard route won, so the
+  // hostname served the htp.sh homepage instead of this router. A route for
+  // the specific host is more specific than the wildcard and takes precedence.
+  //
+  // Additive: it adds one pattern and removes nothing. htp.sh root, /ai,
+  // /osint and /osint/gods-eye keep their existing owners.
+  "routes": [
+    { "pattern": "god.htp.sh/*", "zone_name": "htp.sh" }
+  ]
+}
