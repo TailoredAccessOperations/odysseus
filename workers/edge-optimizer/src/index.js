@@ -169,12 +169,29 @@ const HOP_BY_HOP = new Set([
   'content-encoding', 'content-length',
 ]);
 
-/** Copy origin headers, dropping hop-by-hop. Set-Cookie survives (see below). */
+/**
+ * Upstream diagnostic headers this Worker strips.
+ *
+ * The origin (still-firefly-7b67ebk on htp.sh) emits an E8/pi telemetry set
+ * on every response. None of it changes representation, and several are large
+ * enough to be worth real bytes on every request. They pass straight through
+ * a naive header copy, so strip them here rather than assuming the origin
+ * will stop.
+ */
+const STRIP_UPSTREAM = new Set([
+  'x-e8-dimension-hex', 'x-e8-roots-hex', 'x-e8-signature-hex',
+  'x-e8-pi-projection-hex', 'x-math-pi-precision-digits',
+  'x-math-pi-value', 'x-math-pi-value-head',
+  'x-links-speed-e8pi-report', 'x-assets-count-hex',
+]);
+
+/** Copy origin headers, dropping hop-by-hop and E8/pi noise. Set-Cookie survives. */
 export function sanitizeHeaders(originHeaders) {
   const out = new Headers();
   for (const [k, v] of originHeaders) {
     const lower = k.toLowerCase();
     if (HOP_BY_HOP.has(lower)) continue;
+    if (STRIP_UPSTREAM.has(lower)) continue;
     out.append(k, v);
   }
   return out;

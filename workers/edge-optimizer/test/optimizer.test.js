@@ -45,6 +45,28 @@ describe("sanitizeHeaders", () => {
     expect(h.get("set-cookie")).toBe("a=1; Path=/");
   });
 
+  it("strips E8/pi telemetry the origin adds", () => {
+    // Verified against the live origin: htp.sh/ai returns all of these on
+    // every response. They pass straight through a naive copy otherwise.
+    const h = sanitizeHeaders(new Headers({
+      "x-e8-dimension-hex": "0xf8",
+      "x-e8-roots-hex": "0xf0",
+      "x-e8-signature-hex": "0x00001e97d1c6c000",
+      "x-e8-pi-projection-hex": "0x04aae9b7e8851740",
+      "x-math-pi-precision-digits": "200",
+      "x-math-pi-value-head": "3.141592653589...",
+      "x-links-speed-e8pi-report": "{}",
+      "content-type": "application/json",
+    }));
+    for (const k of ["x-e8-dimension-hex", "x-e8-roots-hex",
+                     "x-e8-signature-hex", "x-e8-pi-projection-hex",
+                     "x-math-pi-precision-digits", "x-math-pi-value-head",
+                     "x-links-speed-e8pi-report"]) {
+      expect(h.get(k), k).toBeNull();
+    }
+    expect(h.get("content-type")).toBe("application/json");
+  });
+
   it("preserves multiple set-cookie headers", () => {
     const src = new Headers();
     src.append("set-cookie", "a=1");
