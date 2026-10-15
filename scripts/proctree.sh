@@ -27,8 +27,27 @@ hdr "listening ports (7860 app, 8793 wrangler dev, cloudflared metrics)"
 lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR==1 || /:7860|:8793|cloudflar|workerd|python|uvicorn/'
 
 hdr "health"
-printf 'app  127.0.0.1:7860 -> %s\n' "$(c=$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:7860/); [ "$c" = 000 ] && echo down || echo "$c")"
-printf 'dev  127.0.0.1:8793 -> %s\n' "$(c=$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:8793/); [ "$c" = 000 ] && echo down || echo "$c")"
+
+# Probe a path that the target answers LOCALLY.
+#
+# Hitting "/" on the dev server reports the upstream, not the server: "/" is
+# a proxy route to htp.sh, so a slow or unreachable origin reads as "dev down"
+# while workerd is serving fine (measured: / = 000 after 30s, while
+# /__gateway/health = 200 in 0.15s). Same class of confusion as probing the
+# CDN to learn whether the origin is up.
+#
+# --http1.1 is explicit because a user curlrc may request h2c, which an
+# HTTP/1 dev server does not answer.
+probe() {
+  local url="$1" budget="${2:-8}"
+  local c
+  c=$(curl -s --http1.1 -o /dev/null -m "$budget" -w '%{http_code}' "$url" 2>/dev/null)
+  [ "$c" = 000 ] && echo "down (no response within ${budget}s)" || echo "$c"
+}
+
+printf 'app  127.0.0.1:7860            -> %s\n' "$(probe http://127.0.0.1:7860/ 10)"
+printf 'dev  127.0.0.1:8793 health     -> %s\n' "$(probe http://127.0.0.1:8793/__gateway/health 5)"
+printf 'dev  127.0.0.1:8793 proxied /  -> %s\n' "$(probe http://127.0.0.1:8793/ 10)"
 printf 'cert.pem: %s\n' "$([ -f "$HOME/.cloudflared/cert.pem" ] && echo present || echo MISSING - run: cloudflared tunnel login)"
 command -v cloudflared >/dev/null && cloudflared tunnel info odysseus 2>/dev/null | tail -n +1 | head -8
 
